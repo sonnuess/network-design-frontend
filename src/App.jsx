@@ -76,10 +76,23 @@ function App() {
 
     setLoading(true)
     try {
+      // Преобразуем данные для бэкенда (source/target -> source_node_id/dest_node_id)
       const requestData = {
         nodes: nodes.map(n => ({ id: n.id, lat: n.lat, lon: n.lon })),
-        candidate_links: links,
-        demands: demands.filter(d => d.source && d.target && d.volume > 0),
+        candidate_links: links.map(link => ({
+          source_node_id: link.source,
+          dest_node_id: link.target,
+          distance: link.distance,
+          forced: link.forced,
+          forbidden: link.forbidden
+        })),
+        demands: demands
+          .filter(d => d.source && d.target && d.volume > 0)
+          .map(demand => ({
+            source_node_id: demand.source,
+            dest_node_id: demand.target,
+            volume: demand.volume
+          })),
         params: params
       }
       
@@ -88,11 +101,11 @@ function App() {
       console.log('Ответ бэкенда:', response)
       setResult(response)
       
-      // Обновляем каналы с результатами оптимизации
+      // Обновляем каналы с результатами оптимизации (если есть)
       if (response.links) {
         const updatedLinks = links.map(link => {
           const resultLink = response.links.find(
-            rl => rl.source === link.source && rl.target === link.target
+            rl => rl.source_node_id === link.source && rl.dest_node_id === link.target
           )
           return resultLink ? { ...link, z: resultLink.z, capacity: resultLink.capacity, load: resultLink.load } : link
         })
