@@ -540,14 +540,57 @@ function App() {
               )}
               {result.message && <p><strong>📝 Сообщение:</strong> {result.message}</p>}
               
+              {/* Активные каналы */}
               {result.active_links && result.active_links.length > 0 && (
-                <div>
+                <div style={{ marginTop: '10px' }}>
                   <h4>🔗 Активные каналы:</h4>
-                  {result.active_links.map((link, idx) => (
-                    <div key={idx}>
-                      {getNodeNameByRealId(link.source_node_id)} → {getNodeNameByRealId(link.dest_node_id)}: capacity = {link.capacity?.toFixed(2)}
-                    </div>
-                  ))}
+                  <div style={{ maxHeight: '150px', overflowY: 'auto' }}>
+                    {result.active_links.map((link, idx) => (
+                      <div key={idx} style={{ padding: '5px', background: '#f1f8e9', marginBottom: '3px', borderRadius: '3px' }}>
+                        {getNodeNameByRealId(link.source_node_id)} → {getNodeNameByRealId(link.dest_node_id)}: capacity = {link.capacity?.toFixed(2)}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              
+              {/* Пути для требований */}
+              {result.flows && result.flows.length > 0 && (
+                <div style={{ marginTop: '10px' }}>
+                  <h4>🔄 Пути для требований:</h4>
+                  <div style={{ maxHeight: '250px', overflowY: 'auto' }}>
+                    {result.flows.map((flow, idx) => (
+                      <div key={idx} style={{ 
+                        padding: '10px', 
+                        background: '#e3f2fd', 
+                        borderRadius: '5px', 
+                        marginBottom: '8px'
+                      }}>
+                        <div>
+                          <strong>Требование {idx + 1}:</strong> {getNodeNameByRealId(flow.source_node_id)} → {getNodeNameByRealId(flow.dest_node_id)}
+                          <span style={{ marginLeft: '8px', color: '#1565C0' }}>
+                            объём = {flow.volume?.toFixed(2)}
+                          </span>
+                        </div>
+                        
+                        {flow.paths && flow.paths.length > 0 ? (
+                          flow.paths.map((path, pIdx) => (
+                            <div key={pIdx} style={{ marginTop: '6px', marginLeft: '15px', fontSize: '13px' }}>
+                              <strong>Путь {pIdx + 1}:</strong>{' '}
+                              {path.nodes?.map(nodeId => getNodeNameByRealId(nodeId)).join(' → ')}
+                              <span style={{ marginLeft: '8px', color: '#2e7d32' }}>
+                                поток = {path.flow?.toFixed(2)}, capacity = {path.capacity?.toFixed(2)}
+                              </span>
+                            </div>
+                          ))
+                        ) : (
+                          <div style={{ marginTop: '6px', marginLeft: '15px', fontSize: '13px', color: '#666' }}>
+                            поток = {flow.flow_value?.toFixed(2)}, capacity = {flow.capacity?.toFixed(2)}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
