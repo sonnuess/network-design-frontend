@@ -123,6 +123,39 @@ function App() {
     return null
   }
 
+  // Вспомогательная функция удаления канала по реальным ID
+  const deleteLinkByRealIds = async (sourceRealId, destRealId) => {
+    try {
+      const linksResponse = await fetch('http://localhost:8000/api/v2/links')
+      const allLinks = await linksResponse.json()
+      
+      const linkToDelete = allLinks.find(link => 
+        (link.source_node_id === sourceRealId && link.dest_node_id === destRealId) ||
+        (link.source_node_id === destRealId && link.dest_node_id === sourceRealId)
+      )
+      
+      if (!linkToDelete) {
+        console.error('Канал не найден в БД')
+        return false
+      }
+      
+      const response = await fetch(`http://localhost:8000/api/v2/links/${linkToDelete.id}`, {
+        method: 'DELETE'
+      })
+      
+      if (response.ok) {
+        console.log(`Канал ${sourceRealId}→${destRealId} удалён из БД`)
+        return true
+      } else {
+        console.error('Ошибка удаления канала:', response.status)
+        return false
+      }
+    } catch (error) {
+      console.error('Ошибка:', error)
+      return false
+    }
+  }
+
   // Сохранение канала в БД
   const saveLinkToBackend = async (sourceId, destId) => {
     const sourceNode = nodes.find(n => n.id === sourceId)
@@ -164,7 +197,7 @@ function App() {
     }
   }
 
-  // Удаление канала из БД
+  // Удаление канала из БД (по временным ID)
   const deleteLinkFromBackend = async (sourceId, destId) => {
     const sourceNode = nodes.find(n => n.id === sourceId)
     const destNode = nodes.find(n => n.id === destId)
@@ -174,43 +207,19 @@ function App() {
       return false
     }
     
-    const sourceRealId = await getRealNodeId(sourceId, sourceNode.lat, sourceNode.lon, sourceNode.name)
-    const destRealId = await getRealNodeId(destId, destNode.lat, destNode.lon, destNode.name)
+    let sourceRealId = realNodeIds[sourceId]
+    let destRealId = realNodeIds[destId]
     
     if (!sourceRealId || !destRealId) {
-      console.error('Не удалось получить реальные ID узлов')
-      return false
+      const sourceSaved = await getRealNodeId(sourceId, sourceNode.lat, sourceNode.lon, sourceNode.name)
+      const destSaved = await getRealNodeId(destId, destNode.lat, destNode.lon, destNode.name)
+      if (!sourceSaved || !destSaved) return false
+      sourceRealId = realNodeIds[sourceId]
+      destRealId = realNodeIds[destId]
+      if (!sourceRealId || !destRealId) return false
     }
     
-    try {
-      const linksResponse = await fetch('http://localhost:8000/api/v2/links')
-      const allLinks = await linksResponse.json()
-      
-      const linkToDelete = allLinks.find(link => 
-        (link.source_node_id === sourceRealId && link.dest_node_id === destRealId) ||
-        (link.source_node_id === destRealId && link.dest_node_id === sourceRealId)
-      )
-      
-      if (!linkToDelete) {
-        console.error('Канал не найден в БД')
-        return false
-      }
-      
-      const response = await fetch(`http://localhost:8000/api/v2/links/${linkToDelete.id}`, {
-        method: 'DELETE'
-      })
-      
-      if (response.ok) {
-        console.log(`Канал ${sourceId}→${destId} удалён из БД`)
-        return true
-      } else {
-        console.error('Ошибка удаления канала:', response.status)
-        return false
-      }
-    } catch (error) {
-      console.error('Ошибка:', error)
-      return false
-    }
+    return await deleteLinkByRealIds(sourceRealId, destRealId)
   }
 
   // Ручное добавление канала
@@ -284,12 +293,10 @@ function App() {
 
   // Обработчик выбора узла
   const handleNodeSelect = (nodeId) => {
-    const nodeName = getNodeName(nodeId)
-    
     if (isDeletingLinkMode) {
       if (selectedNodeId === null) {
         setSelectedNodeId(nodeId)
-        console.log(`Выбран узел ${nodeName} для удаления. Теперь выберите второй узел.`)
+        console.log(`Выбран узел для удаления. Теперь выберите второй узел.`)
       } else {
         deleteLinkManually(selectedNodeId, nodeId)
         setSelectedNodeId(null)
@@ -298,7 +305,7 @@ function App() {
     } else if (isAddingLinkMode) {
       if (selectedNodeId === null) {
         setSelectedNodeId(nodeId)
-        console.log(`Выбран узел ${nodeName} для добавления. Теперь выберите второй узел.`)
+        console.log(`Выбран узел для добавления. Теперь выберите второй узел.`)
       } else {
         addLinkManually(selectedNodeId, nodeId)
         setSelectedNodeId(null)
@@ -444,7 +451,7 @@ function App() {
     }
   }
 
-  // Получение имени узла по ID
+  // Получение имени узла по временному ID
   const getNodeName = (nodeId) => {
     const node = nodes.find(n => n.id === nodeId)
     return node ? (node.name || node.id) : nodeId
@@ -644,22 +651,9 @@ function App() {
                               объем = {flow.volume?.toFixed(2)}
                             </span>
                           </div>
-                          {flow.paths && flow.paths.length > 0 ? (
-                            <div style={{ marginTop: '8px', marginLeft: '15px' }}>
-                              {flow.paths.map((path, pIdx) => (
-                                <div key={pIdx} style={{ fontSize: '12px', color: '#555', marginBottom: '4px' }}>
-                                  Путь {pIdx + 1}: {path.nodes?.map(n => getNodeNameByRealId(n)).join(' → ')}
-                                  <span style={{ color: '#2e7d32', marginLeft: '8px' }}>
-                                    поток = {path.flow?.toFixed(2)}, capacity = {path.capacity?.toFixed(2)}
-                                  </span>
-                                </div>
-                              ))}
-                            </div>
-                          ) : (
-                            <div style={{ marginTop: '5px', fontSize: '12px', color: '#666', marginLeft: '15px' }}>
-                              flow = {flow.flow_value?.toFixed(2)}, capacity = {flow.capacity?.toFixed(2)}
-                            </div>
-                          )}
+                          <div style={{ marginTop: '5px', fontSize: '12px', color: '#666', marginLeft: '15px' }}>
+                            поток = {flow.flow_value?.toFixed(2)}, capacity = {flow.capacity?.toFixed(2)}
+                          </div>
                         </div>
                       )
                     })}
