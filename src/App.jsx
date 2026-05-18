@@ -22,10 +22,11 @@ function App() {
   const [isAddingLinkMode, setIsAddingLinkMode] = useState(false)
   const [isDeletingLinkMode, setIsDeletingLinkMode] = useState(false)
 
-  // Загрузка параметров из БД при старте
+  // Загрузка параметров и узлов из БД при старте
   useEffect(() => {
-    const loadParameters = async () => {
+    const loadInitialData = async () => {
       try {
+        // Загружаем параметры
         const paramsFromBackend = await getParameters()
         if (paramsFromBackend && paramsFromBackend.length > 0) {
           const paramsObj = {}
@@ -38,33 +39,67 @@ function App() {
       } catch (error) {
         console.error('Ошибка загрузки параметров:', error)
       }
+      
+      // Загружаем существующие узлы из БД
+      try {
+        const response = await fetch('http://localhost:8000/api/v2/nodes')
+        if (response.ok) {
+          const nodesFromBackend = await response.json()
+          if (nodesFromBackend.length > 0) {
+            console.log('Загружены существующие узлы из БД:', nodesFromBackend)
+            const loadedNodes = nodesFromBackend.map(node => ({
+              id: `node_${node.id}`,
+              realId: node.id,
+              name: node.name,
+              lat: node.lat,
+              lon: node.lng
+            }))
+            setNodes(loadedNodes)
+            const idMap = {}
+            loadedNodes.forEach(node => {
+              idMap[node.id] = node.realId
+            })
+            setRealNodeIds(idMap)
+          }
+        }
+      } catch (error) {
+        console.error('Ошибка загрузки узлов:', error)
+      }
     }
-    loadParameters()
+    loadInitialData()
   }, [])
 
-  // Добавление узла (с сохранением в БД)
+  // Добавление узла (сохраняем в БД)
   const addNode = async (newNode) => {
     try {
       const response = await fetch('http://localhost:8000/api/v2/nodes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: newNode.name || `Node ${newNode.id}`,
-          lat: newNode.lat,
-          lng: newNode.lon  // ← исправлено: lon → lng
+          name: newNode.name || `Node ${Date.now()}`,
+          lat: Number(newNode.lat),
+          lng: Number(newNode.lon)
         })
       })
       
       if (response.ok) {
         const savedNode = await response.json()
-        setRealNodeIds(prev => ({ ...prev, [newNode.id]: savedNode.id }))
-        setNodes([...nodes, newNode])
-        console.log(`Узел ${newNode.id} сохранён в БД с ID ${savedNode.id}`)
+        const tempId = `node_${savedNode.id}`
+        setRealNodeIds(prev => ({ ...prev, [tempId]: savedNode.id }))
+        const newFrontNode = {
+          ...newNode,
+          id: tempId,
+          realId: savedNode.id
+        }
+        setNodes(prev => [...prev, newFrontNode])
+        console.log(`Узел сохранён в БД с ID ${savedNode.id}`)
       } else {
         console.error('Ошибка сохранения узла:', response.status)
+        setNodes(prev => [...prev, newNode])
       }
     } catch (error) {
       console.error('Ошибка:', error)
+      setNodes(prev => [...prev, newNode])
     }
   }
 
@@ -119,34 +154,49 @@ function App() {
     }
   }
 
-  // Получение реального ID узла из БД
-  const getRealNodeId = async (tempId, lat, lng, name) => {
-    if (realNodeIds[tempId]) return realNodeIds[tempId]
+  // Сохранение канала в БД
+  const saveLinkToBackend = async (sourceId, destId) => {
+    const sourceRealId = realNodeIds[sourceId]
+    const destRealId = realNodeIds[destId]
+    
+    if (!sourceRealId || !destRealId) {
+      console.error('Не удалось получить реальные ID узлов')
+      return false
+    }
     
     try {
-      const response = await fetch('http://localhost:8000/api/v2/nodes', {
+      const response = await fetch('http://localhost:8000/api/v2/links', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: name || `Node ${tempId}`,
-          lat: lat,
-          lng: lng  // ← исправлено: была ошибка в параметре
+          source_node_id: sourceRealId,
+          dest_node_id: destRealId
         })
       })
       
       if (response.ok) {
-        const savedNode = await response.json()
-        setRealNodeIds(prev => ({ ...prev, [tempId]: savedNode.id }))
-        return savedNode.id
+        console.log(`Канал ${sourceRealId}→${destRealId} сохранён в БД`)
+        return true
+      } else {
+        console.error('Ошибка сохранения канала:', response.status)
+        return false
       }
     } catch (error) {
-      console.error('Ошибка получения ID узла:', error)
+      console.error('Ошибка:', error)
+      return false
     }
-    return null
   }
 
-  // Вспомогательная функция удаления канала по реальным ID
-  const deleteLinkByRealIds = async (sourceRealId, destRealId) => {
+  // Удаление канала из БД
+  const deleteLinkFromBackend = async (sourceId, destId) => {
+    const sourceRealId = realNodeIds[sourceId]
+    const destRealId = realNodeIds[destId]
+    
+    if (!sourceRealId || !destRealId) {
+      console.error('Не удалось получить реальные ID узлов')
+      return false
+    }
+    
     try {
       const linksResponse = await fetch('http://localhost:8000/api/v2/links')
       const allLinks = await linksResponse.json()
@@ -178,76 +228,52 @@ function App() {
     }
   }
 
-  // Сохранение канала в БД
-  const saveLinkToBackend = async (sourceId, destId) => {
-    const sourceNode = nodes.find(n => n.id === sourceId)
-    const destNode = nodes.find(n => n.id === destId)
-    
-    if (!sourceNode || !destNode) {
-      console.error('Узлы не найдены')
-      return false
-    }
-    
-    const sourceRealId = await getRealNodeId(sourceId, sourceNode.lat, sourceNode.lon, sourceNode.name)
-    const destRealId = await getRealNodeId(destId, destNode.lat, destNode.lon, destNode.name)
-    
-    if (!sourceRealId || !destRealId) {
-      console.error('Не удалось получить реальные ID узлов')
-      return false
-    }
-    
-    try {
-      const response = await fetch('http://localhost:8000/api/v2/links', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          source_node_id: sourceRealId,
-          dest_node_id: destRealId
-        })
-      })
-      
-      if (response.ok) {
-        console.log(`Канал ${sourceId}→${destId} сохранён в БД`)
-        return true
-      } else {
-        console.error('Ошибка сохранения канала:', response.status)
-        return false
+  // Сохранение требований в БД
+  const saveDemandsToBackend = async () => {
+    for (const demand of demands) {
+      if (!demand.source || !demand.target || !demand.volume) {
+        console.warn('Пропуск требования: не хватает данных', demand)
+        continue
       }
-    } catch (error) {
-      console.error('Ошибка:', error)
-      return false
+      
+      const sourceRealId = realNodeIds[demand.source]
+      const destRealId = realNodeIds[demand.target]
+      
+      if (!sourceRealId || !destRealId) {
+        console.error('Не найдены реальные ID для требования:', {
+          source: demand.source,
+          target: demand.target,
+          sourceRealId,
+          destRealId
+        })
+        continue
+      }
+      
+      try {
+        const response = await fetch('http://localhost:8000/api/v2/demands', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            source_node_id: sourceRealId,
+            dest_node_id: destRealId,
+            volume: Number(demand.volume)
+          })
+        })
+        
+        if (response.ok) {
+          console.log(`Требование ${sourceRealId}→${destRealId} сохранено`)
+        } else {
+          console.error('Ошибка сохранения требования:', response.status)
+        }
+      } catch (error) {
+        console.error('Ошибка:', error)
+      }
     }
-  }
-
-  // Удаление канала из БД (по временным ID)
-  const deleteLinkFromBackend = async (sourceId, destId) => {
-    const sourceNode = nodes.find(n => n.id === sourceId)
-    const destNode = nodes.find(n => n.id === destId)
-    
-    if (!sourceNode || !destNode) {
-      console.error('Узлы не найдены')
-      return false
-    }
-    
-    let sourceRealId = realNodeIds[sourceId]
-    let destRealId = realNodeIds[destId]
-    
-    if (!sourceRealId || !destRealId) {
-      const sourceSaved = await getRealNodeId(sourceId, sourceNode.lat, sourceNode.lon, sourceNode.name)
-      const destSaved = await getRealNodeId(destId, destNode.lat, destNode.lon, destNode.name)
-      if (!sourceSaved || !destSaved) return false
-      sourceRealId = realNodeIds[sourceId]
-      destRealId = realNodeIds[destId]
-      if (!sourceRealId || !destRealId) return false
-    }
-    
-    return await deleteLinkByRealIds(sourceRealId, destRealId)
   }
 
   // Ручное добавление канала
   const addLinkManually = async (sourceId, destId) => {
     if (sourceId === destId) {
-      console.warn('Нельзя создать канал от узла к самому себе')
       setError('Нельзя создать канал от узла к самому себе')
       return false
     }
@@ -259,23 +285,19 @@ function App() {
     )
     
     if (linkExists) {
-      console.warn('Такой канал уже существует')
       setError('Такой канал уже существует')
       return false
-    }
-    
-    const newLink = {
-      source_node_id: sourceId,
-      dest_node_id: destId,
-      forced: false,
-      forbidden: false
     }
     
     const saved = await saveLinkToBackend(sourceId, destId)
     
     if (saved) {
-      setLinks([...links, newLink])
-      setResult(null)
+      setLinks([...links, {
+        source_node_id: sourceId,
+        dest_node_id: destId,
+        forced: false,
+        forbidden: false
+      }])
       setError(null)
       console.log('Канал добавлен:', sourceId, '→', destId)
       return true
@@ -294,27 +316,14 @@ function App() {
     )
     
     if (!linkToDelete) {
-      console.warn('Канал не найден')
       setError('Канал не найден')
       return false
-    }
-    
-    // Сначала сохраняем узлы в БД (если ещё не сохранены)
-    const sourceNode = nodes.find(n => n.id === sourceId)
-    const destNode = nodes.find(n => n.id === destId)
-    
-    if (sourceNode && !realNodeIds[sourceId]) {
-      await getRealNodeId(sourceId, sourceNode.lat, sourceNode.lon, sourceNode.name)
-    }
-    if (destNode && !realNodeIds[destId]) {
-      await getRealNodeId(destId, destNode.lat, destNode.lon, destNode.name)
     }
     
     const deleted = await deleteLinkFromBackend(sourceId, destId)
     
     if (deleted) {
       setLinks(links.filter(link => link !== linkToDelete))
-      setResult(null)
       setError(null)
       console.log('Канал удалён:', sourceId, '→', destId)
       return true
@@ -329,7 +338,7 @@ function App() {
     if (isDeletingLinkMode) {
       if (selectedNodeId === null) {
         setSelectedNodeId(nodeId)
-        console.log(`Выбран узел для удаления. Теперь выберите второй узел.`)
+        console.log('Выберите второй узел для удаления канала')
       } else {
         deleteLinkManually(selectedNodeId, nodeId)
         setSelectedNodeId(null)
@@ -338,23 +347,20 @@ function App() {
     } else if (isAddingLinkMode) {
       if (selectedNodeId === null) {
         setSelectedNodeId(nodeId)
-        console.log(`Выбран узел для добавления. Теперь выберите второй узел.`)
+        console.log('Выберите второй узел для добавления канала')
       } else {
         addLinkManually(selectedNodeId, nodeId)
         setSelectedNodeId(null)
         setIsAddingLinkMode(false)
       }
-    } else {
-      console.log('Выбран узел:', nodeId)
     }
   }
 
-  // Выход из всех режимов
+  // Выход из режимов
   const exitModes = () => {
     setIsAddingLinkMode(false)
     setIsDeletingLinkMode(false)
     setSelectedNodeId(null)
-    setError(null)
   }
 
   // Управление требованиями
@@ -372,73 +378,14 @@ function App() {
     setDemands(newDemands)
   }
 
-  // Сохранение узлов в БД (для оптимизации)
-  const saveNodesToBackend = async () => {
-    const savedNodes = []
-    for (const node of nodes) {
-      try {
-        const response = await fetch('http://localhost:8000/api/v2/nodes', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: node.name || `Node ${node.id}`,
-            lat: node.lat,
-            lng: node.lon  // ← исправлено: lon → lng
-          }),
-        })
-        
-        if (response.ok) {
-          const savedNode = await response.json()
-          savedNodes.push(savedNode)
-          setRealNodeIds(prev => ({ ...prev, [node.id]: savedNode.id }))
-          console.log(`Узел ${node.id} сохранён с ID ${savedNode.id}`)
-        } else {
-          console.error(`Ошибка сохранения узла ${node.id}:`, response.status)
-        }
-      } catch (error) {
-        console.error('Ошибка:', error)
-      }
-    }
-    return savedNodes
-  }
-
-  // Сохранение требований в БД
-  const saveDemandsToBackend = async (nodeMap) => {
-    for (const demand of demands) {
-      if (!demand.source || !demand.target) continue
-      
-      const sourceId = nodeMap[demand.source]
-      const destId = nodeMap[demand.target]
-      
-      if (!sourceId || !destId) continue
-
-      try {
-        await fetch('http://localhost:8000/api/v2/demands', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            source_node_id: sourceId,
-            dest_node_id: destId,
-            volume: demand.volume
-          }),
-        })
-        console.log(`Требование ${sourceId}→${destId} сохранено`)
-      } catch (error) {
-        console.error('Ошибка сохранения требования:', error)
-      }
-    }
-  }
-
   // Запуск оптимизации
   const runOptimization = async () => {
     if (nodes.length < 2) {
-      console.warn('Добавьте хотя бы 2 узла')
       setError('Добавьте хотя бы 2 узла')
       return
     }
     
     if (demands.length === 0 || demands.every(d => !d.source || !d.target)) {
-      console.warn('Добавьте хотя бы одно требование')
       setError('Добавьте хотя бы одно требование')
       return
     }
@@ -448,14 +395,8 @@ function App() {
     exitModes()
     
     try {
-      const savedNodes = await saveNodesToBackend()
-      
-      const nodeMap = {}
-      for (let i = 0; i < nodes.length; i++) {
-        nodeMap[nodes[i].id] = savedNodes[i]?.id
-      }
-      
-      await saveDemandsToBackend(nodeMap)
+      // Сохраняем все требования
+      await saveDemandsToBackend()
       
       const response = await fetch('http://localhost:8000/api/v2/calculate', {
         method: 'POST',
@@ -472,10 +413,6 @@ function App() {
       console.log('Ответ бэкенда:', resultData)
       setResult(resultData)
       
-      if (resultData.status === 'error') {
-        setError(resultData.message || 'Ошибка при расчёте')
-      }
-      
     } catch (error) {
       console.error('Ошибка:', error)
       setError(error.message)
@@ -484,13 +421,11 @@ function App() {
     }
   }
 
-  // Получение имени узла по временному ID
   const getNodeName = (nodeId) => {
     const node = nodes.find(n => n.id === nodeId)
     return node ? (node.name || node.id) : nodeId
   }
 
-  // Получение имени узла по реальному ID из БД
   const getNodeNameByRealId = (realId) => {
     const entry = Object.entries(realNodeIds).find(([_, id]) => id === realId)
     if (entry) {
@@ -559,7 +494,7 @@ function App() {
         </div>
         
         <div style={{ flex: 1 }}>
-          {/* Блок параметров */}
+          {/* Параметры */}
           <div style={{ padding: '15px', border: '1px solid #ccc', borderRadius: '8px', marginBottom: '15px' }}>
             <h3>Параметры</h3>
             <div>
@@ -588,20 +523,9 @@ function App() {
                 onChange={(e) => setParams({...params, U: parseFloat(e.target.value)})} 
               />
             </div>
-            <div style={{ marginTop: '10px' }}>
-              <button 
-                onClick={saveParamsToBackend} 
-                disabled={savingParams}
-                style={{ 
-                  backgroundColor: '#4CAF50', 
-                  color: 'white',
-                  padding: '5px 15px',
-                  cursor: savingParams ? 'not-allowed' : 'pointer'
-                }}
-              >
-                {savingParams ? '💾 Сохранение...' : '💾 Сохранить параметры'}
-              </button>
-            </div>
+            <button onClick={saveParamsToBackend} disabled={savingParams}>
+              {savingParams ? '💾 Сохранение...' : '💾 Сохранить параметры'}
+            </button>
           </div>
           
           {/* Требования */}
@@ -609,23 +533,34 @@ function App() {
             <h3>Требования (Demands)</h3>
             {demands.map((demand, idx) => (
               <div key={idx} style={{ marginBottom: '10px', padding: '10px', background: '#f5f5f5', borderRadius: '5px' }}>
-                <select value={demand.source} onChange={(e) => updateDemand(idx, 'source', e.target.value)}>
+                <select 
+                  value={demand.source} 
+                  onChange={(e) => updateDemand(idx, 'source', e.target.value)}
+                >
                   <option value="">Источник</option>
                   {nodes.map(n => <option key={n.id} value={n.id}>{n.name || n.id}</option>)}
                 </select>
                 →
-                <select value={demand.target} onChange={(e) => updateDemand(idx, 'target', e.target.value)}>
+                <select 
+                  value={demand.target} 
+                  onChange={(e) => updateDemand(idx, 'target', e.target.value)}
+                >
                   <option value="">Назначение</option>
                   {nodes.map(n => <option key={n.id} value={n.id}>{n.name || n.id}</option>)}
                 </select>
-                <input type="number" value={demand.volume} onChange={(e) => updateDemand(idx, 'volume', parseFloat(e.target.value))} style={{ width: '70px' }} />
+                <input 
+                  type="number" 
+                  value={demand.volume} 
+                  onChange={(e) => updateDemand(idx, 'volume', parseFloat(e.target.value))} 
+                  style={{ width: '70px' }} 
+                />
                 <button onClick={() => removeDemand(idx)}>🗑️</button>
               </div>
             ))}
             <button onClick={addDemand}>+ Добавить требование</button>
           </div>
           
-          {/* Результат оптимизации */}
+          {/* Результат */}
           {result && (
             <div style={{ padding: '15px', border: '1px solid #4CAF50', borderRadius: '8px', background: '#e8f5e9' }}>
               <h3>📊 Результат оптимизации</h3>
@@ -635,62 +570,14 @@ function App() {
               )}
               {result.message && <p><strong>📝 Сообщение:</strong> {result.message}</p>}
               
-              {/* Активные каналы */}
               {result.active_links && result.active_links.length > 0 && (
-                <div style={{ marginTop: '15px' }}>
+                <div>
                   <h4>🔗 Активные каналы:</h4>
-                  <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
-                    {result.active_links.map((link, idx) => {
-                      const sourceName = getNodeNameByRealId(link.source_node_id)
-                      const destName = getNodeNameByRealId(link.dest_node_id)
-                      return (
-                        <div key={idx} style={{ 
-                          padding: '8px', 
-                          background: '#f1f8e9', 
-                          borderRadius: '5px', 
-                          marginBottom: '5px',
-                          fontSize: '13px'
-                        }}>
-                          <strong>Канал {idx + 1}:</strong> {sourceName} → {destName}
-                          <span style={{ color: '#2e7d32', marginLeft: '8px' }}>
-                            capacity = {link.capacity?.toFixed(2)}
-                          </span>
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
-              
-              {/* Потоки по требованиям */}
-              {result.flows && result.flows.length > 0 && (
-                <div style={{ marginTop: '15px' }}>
-                  <h4>🔄 Потоки по требованиям:</h4>
-                  <div style={{ maxHeight: '250px', overflowY: 'auto' }}>
-                    {result.flows.map((flow, idx) => {
-                      const sourceName = getNodeNameByRealId(flow.source_node_id)
-                      const destName = getNodeNameByRealId(flow.dest_node_id)
-                      return (
-                        <div key={idx} style={{ 
-                          padding: '10px', 
-                          background: '#e3f2fd', 
-                          borderRadius: '5px', 
-                          marginBottom: '10px',
-                          borderLeft: '3px solid #2196F3'
-                        }}>
-                          <div>
-                            <strong>Требование {idx + 1}:</strong> {sourceName} → {destName}
-                            <span style={{ color: '#1565C0', marginLeft: '8px' }}>
-                              объем = {flow.volume?.toFixed(2)}
-                            </span>
-                          </div>
-                          <div style={{ marginTop: '5px', fontSize: '12px', color: '#666', marginLeft: '15px' }}>
-                            поток = {flow.flow_value?.toFixed(2)}, capacity = {flow.capacity?.toFixed(2)}
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
+                  {result.active_links.map((link, idx) => (
+                    <div key={idx}>
+                      {getNodeNameByRealId(link.source_node_id)} → {getNodeNameByRealId(link.dest_node_id)}: capacity = {link.capacity?.toFixed(2)}
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
@@ -698,7 +585,7 @@ function App() {
           
           {/* Ошибка */}
           {error && (
-            <div style={{ padding: '15px', border: '1px solid #f44336', borderRadius: '8px', background: '#ffebee', marginTop: '15px' }}>
+            <div style={{ padding: '15px', border: '1px solid #f44336', borderRadius: '8px', background: '#ffebee' }}>
               <h3 style={{ color: '#c62828' }}>❌ Ошибка</h3>
               <p>{error}</p>
             </div>
