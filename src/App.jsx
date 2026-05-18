@@ -26,7 +26,6 @@ function App() {
   useEffect(() => {
     const loadInitialData = async () => {
       try {
-        // Загружаем параметры
         const paramsFromBackend = await getParameters()
         if (paramsFromBackend && paramsFromBackend.length > 0) {
           const paramsObj = {}
@@ -103,25 +102,6 @@ function App() {
     }
   }
 
-  // Генерация всех возможных каналов
-  const generateAllLinks = () => {
-    const newLinks = []
-    for (let i = 0; i < nodes.length; i++) {
-      for (let j = i + 1; j < nodes.length; j++) {
-        newLinks.push({
-          source_node_id: nodes[i].id,
-          dest_node_id: nodes[j].id,
-          forced: false,
-          forbidden: false
-        })
-      }
-    }
-    setLinks(newLinks)
-    setResult(null)
-    setError(null)
-    console.log('Сгенерировано каналов:', newLinks.length)
-  }
-
   // Сохранение параметров в БД
   const saveParamsToBackend = async () => {
     setSavingParams(true)
@@ -194,12 +174,13 @@ function App() {
     
     if (!sourceRealId || !destRealId) {
       console.error('Не удалось получить реальные ID узлов')
+      setError('Не удалось найти узлы в базе данных')
       return false
     }
     
     try {
-      const linksResponse = await fetch('http://localhost:8000/api/v2/links')
-      const allLinks = await linksResponse.json()
+      const response = await fetch('http://localhost:8000/api/v2/links')
+      const allLinks = await response.json()
       
       const linkToDelete = allLinks.find(link => 
         (link.source_node_id === sourceRealId && link.dest_node_id === destRealId) ||
@@ -208,22 +189,25 @@ function App() {
       
       if (!linkToDelete) {
         console.error('Канал не найден в БД')
+        setError('Канал не найден в базе данных')
         return false
       }
       
-      const response = await fetch(`http://localhost:8000/api/v2/links/${linkToDelete.id}`, {
+      const deleteResponse = await fetch(`http://localhost:8000/api/v2/links/${linkToDelete.id}`, {
         method: 'DELETE'
       })
       
-      if (response.ok) {
+      if (deleteResponse.ok) {
         console.log(`Канал ${sourceRealId}→${destRealId} удалён из БД`)
         return true
       } else {
-        console.error('Ошибка удаления канала:', response.status)
+        console.error('Ошибка удаления канала:', deleteResponse.status)
+        setError('Не удалось удалить канал')
         return false
       }
     } catch (error) {
       console.error('Ошибка:', error)
+      setError(error.message)
       return false
     }
   }
@@ -242,9 +226,7 @@ function App() {
       if (!sourceRealId || !destRealId) {
         console.error('Не найдены реальные ID для требования:', {
           source: demand.source,
-          target: demand.target,
-          sourceRealId,
-          destRealId
+          target: demand.target
         })
         continue
       }
@@ -309,28 +291,20 @@ function App() {
 
   // Ручное удаление канала
   const deleteLinkManually = async (sourceId, destId) => {
-    const linkToDelete = links.find(
-      link => 
-        (link.source_node_id === sourceId && link.dest_node_id === destId) ||
-        (link.source_node_id === destId && link.dest_node_id === sourceId)
-    )
-    
-    if (!linkToDelete) {
-      setError('Канал не найден')
-      return false
-    }
+    console.log('Удаление канала:', sourceId, '→', destId)
     
     const deleted = await deleteLinkFromBackend(sourceId, destId)
     
     if (deleted) {
-      setLinks(links.filter(link => link !== linkToDelete))
+      setLinks(prevLinks => prevLinks.filter(link => 
+        !(link.source_node_id === sourceId && link.dest_node_id === destId) &&
+        !(link.source_node_id === destId && link.dest_node_id === sourceId)
+      ))
       setError(null)
-      console.log('Канал удалён:', sourceId, '→', destId)
+      console.log('Канал удалён из интерфейса')
       return true
-    } else {
-      setError('Не удалось удалить канал из базы данных')
-      return false
     }
+    return false
   }
 
   // Обработчик выбора узла
@@ -395,7 +369,6 @@ function App() {
     exitModes()
     
     try {
-      // Сохраняем все требования
       await saveDemandsToBackend()
       
       const response = await fetch('http://localhost:8000/api/v2/calculate', {
@@ -452,9 +425,6 @@ function App() {
           />
           
           <div style={{ marginTop: '15px', display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-            <button onClick={generateAllLinks} disabled={nodes.length < 2}>
-              🔗 Сгенерировать все каналы
-            </button>
             <button 
               onClick={() => {
                 exitModes()
@@ -489,7 +459,7 @@ function App() {
             </button>
           </div>
           <p style={{ fontSize: '12px', color: 'gray' }}>
-            💡 Кликните на карту → добавить узел. Используйте кнопки для управления каналами.
+            💡 Кликните на карту → добавить узел. Нажмите "Добавить канал", затем выберите два узла.
           </p>
         </div>
         
