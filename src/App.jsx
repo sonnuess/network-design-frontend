@@ -1,18 +1,40 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import MapEditor from './components/MapEditor'
-import { optimizeNetwork } from './api/optimize'
+import { optimizeNetwork, getParameters } from './api/optimize'
 
 function App() {
   const [nodes, setNodes] = useState([])
   const [links, setLinks] = useState([])
   const [demands, setDemands] = useState([])
   const [params, setParams] = useState({
-    c_km: 1.0,
-    c_u: 0.1,
-    U: 100.0
+    c_km: 100.0,
+    c_u: 10.0,
+    U: 1000.0
   })
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState(null)
+
+  // Загрузка параметров из БД при запуске
+  useEffect(() => {
+    const loadParameters = async () => {
+      try {
+        const paramsFromBackend = await getParameters()
+        if (paramsFromBackend && paramsFromBackend.length > 0) {
+          const paramsObj = {}
+          paramsFromBackend.forEach(p => {
+            paramsObj[p.key] = p.value
+          })
+          setParams(paramsObj)
+          console.log('Параметры загружены из БД:', paramsObj)
+        } else {
+          console.log('Параметров в БД нет, используем значения по умолчанию')
+        }
+      } catch (error) {
+        console.error('Ошибка загрузки параметров:', error)
+      }
+    }
+    loadParameters()
+  }, [])
 
   // Добавление узла
   const addNode = (newNode) => {
@@ -24,22 +46,16 @@ function App() {
     const newLinks = []
     for (let i = 0; i < nodes.length; i++) {
       for (let j = i + 1; j < nodes.length; j++) {
-        // Примерное расстояние в км (1 градус ≈ 111 км)
-        const dx = (nodes[i].lat - nodes[j].lat) * 111
-        const dy = (nodes[i].lon - nodes[j].lon) * 85
-        const distance = Math.sqrt(dx * dx + dy * dy)
-        
         newLinks.push({
-          source: nodes[i].id,
-          target: nodes[j].id,
-          distance: distance,
+          source_node_id: nodes[i].id,
+          dest_node_id: nodes[j].id,
           forced: false,
           forbidden: false
         })
       }
     }
     setLinks(newLinks)
-    setResult(null) // Сброс результатов при изменении топологии
+    setResult(null)
   }
 
   // Управление требованиями
@@ -55,6 +71,116 @@ function App() {
     const newDemands = [...demands]
     newDemands[index][field] = value
     setDemands(newDemands)
+  }
+
+  // Сохранение узлов в базу данных
+  const saveNodesToBackend = async () => {
+    const savedNodes = []
+    for (const node of nodes) {
+      const response = await fetch('http://localhost:8000/api/v2/nodes', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: node.name || `Node ${node.id}`,
+          lat: node.lat,
+          lng: node.lon
+        }),
+      })
+      
+      if (response.ok) {
+        const savedNode = await response.json()
+        savedNodes.push(savedNode)
+        console.log(`Узел ${node.id} сохранён с ID ${savedNode.id}`)
+      } else {
+        console.error(`Ошибка сохранения узла ${node.id}:`, response.status)
+      }
+    }
+    return savedNodes
+  }
+
+  // Сохранение каналов в базу данных
+  const saveLinksToBackend = async (savedNodes) => {
+    // Создаём карту для сопоставления временных ID с реальными
+    const nodeMap = {}
+    for (let i = 0; i < nodes.length; i++) {
+      const tempId = nodes[i].id
+      const realId = savedNodes[i]?.id
+      if (realId) {
+        nodeMap[tempId] = realId
+      }
+    }
+
+    for (const link of links) {
+      const sourceId = nodeMap[link.source_node_id]
+      const destId = nodeMap[link.dest_node_id]
+      
+      if (!sourceId || !destId) {
+        console.error('Не найден ID узла для канала:', link)
+        continue
+      }
+
+      const response = await fetch('http://localhost:8000/api/v2/links', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          source_node_id: sourceId,
+          dest_node_id: destId
+        }),
+      })
+      
+      if (response.ok) {
+        console.log(`Канал ${link.source_node_id}->${link.dest_node_id} сохранён`)
+      } else {
+        console.error(`Ошибка сохранения канала:`, response.status)
+      }
+    }
+  }
+
+  // Сохранение требований в базу данных
+  const saveDemandsToBackend = async (savedNodes) => {
+    // Создаём карту для сопоставления временных ID с реальными
+    const nodeMap = {}
+    for (let i = 0; i < nodes.length; i++) {
+      const tempId = nodes[i].id
+      const realId = savedNodes[i]?.id
+      if (realId) {
+        nodeMap[tempId] = realId
+      }
+    }
+
+    for (const demand of demands) {
+      if (!demand.source || !demand.target) continue
+      
+      const sourceId = nodeMap[demand.source]
+      const destId = nodeMap[demand.target]
+      
+      if (!sourceId || !destId) {
+        console.error('Не найден ID узла для требования:', demand)
+        continue
+      }
+
+      const response = await fetch('http://localhost:8000/api/v2/demands', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          source_node_id: sourceId,
+          dest_node_id: destId,
+          volume: demand.volume
+        }),
+      })
+      
+      if (response.ok) {
+        console.log(`Требование ${demand.source}->${demand.target} сохранено`)
+      } else {
+        console.error(`Ошибка сохранения требования:`, response.status)
+      }
+    }
   }
 
   // Запуск оптимизации
@@ -76,43 +202,34 @@ function App() {
 
     setLoading(true)
     try {
-      // Преобразуем данные для бэкенда (source/target -> source_node_id/dest_node_id)
-      const requestData = {
-        nodes: nodes.map(n => ({ id: n.id, lat: n.lat, lon: n.lon })),
-        candidate_links: links.map(link => ({
-          source_node_id: link.source,
-          dest_node_id: link.target,
-          distance: link.distance,
-          forced: link.forced,
-          forbidden: link.forbidden
-        })),
-        demands: demands
-          .filter(d => d.source && d.target && d.volume > 0)
-          .map(demand => ({
-            source_node_id: demand.source,
-            dest_node_id: demand.target,
-            volume: demand.volume
-          })),
-        params: params
+      // 1. Сохраняем узлы и получаем их реальные ID
+      const savedNodes = await saveNodesToBackend()
+      
+      // 2. Сохраняем каналы с реальными ID
+      await saveLinksToBackend(savedNodes)
+      
+      // 3. Сохраняем требования с реальными ID
+      await saveDemandsToBackend(savedNodes)
+      
+      // 4. Отправляем запрос на оптимизацию
+      const response = await fetch('http://localhost:8000/api/v2/calculate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({})
+      })
+      
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(`Ошибка ${response.status}: ${errorText}`)
       }
       
-      console.log('Отправляем на бэкенд:', requestData)
-      const response = await optimizeNetwork(requestData)
-      console.log('Ответ бэкенда:', response)
-      setResult(response)
+      const resultData = await response.json()
+      console.log('Ответ бэкенда:', resultData)
+      setResult(resultData)
       
-      // Обновляем каналы с результатами оптимизации (если есть)
-      if (response.links) {
-        const updatedLinks = links.map(link => {
-          const resultLink = response.links.find(
-            rl => rl.source_node_id === link.source && rl.dest_node_id === link.target
-          )
-          return resultLink ? { ...link, z: resultLink.z, capacity: resultLink.capacity, load: resultLink.load } : link
-        })
-        setLinks(updatedLinks)
-      }
-      
-      alert(`✅ Оптимизация завершена!\nСтоимость сети: ${response.objective?.toFixed(2)}`)
+      alert(`✅ Оптимизация завершена!\nСтоимость сети: ${resultData.objective?.toFixed(2)}`)
     } catch (error) {
       console.error('Ошибка:', error)
       alert('❌ Ошибка при оптимизации: ' + error.message)
@@ -126,7 +243,6 @@ function App() {
       <h1>Проектирование топологии сети</h1>
       
       <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
-        {/* Левая колонка - карта */}
         <div style={{ flex: 2 }}>
           <MapEditor
             nodes={nodes}
@@ -148,47 +264,70 @@ function App() {
           </p>
         </div>
         
-        {/* Правая колонка - панели */}
         <div style={{ flex: 1 }}>
-          {/* Параметры */}
           <div style={{ padding: '15px', border: '1px solid #ccc', borderRadius: '8px', marginBottom: '15px' }}>
             <h3>Параметры</h3>
             <div style={{ marginBottom: '10px' }}>
               <label>c_km (стоимость км): </label>
-              <input type="number" step="0.1" value={params.c_km} onChange={(e) => setParams({...params, c_km: parseFloat(e.target.value)})} />
+              <input 
+                type="number" 
+                step="0.1" 
+                value={params.c_km} 
+                onChange={(e) => setParams({...params, c_km: parseFloat(e.target.value)})} 
+              />
             </div>
             <div style={{ marginBottom: '10px' }}>
               <label>c_u (стоимость емкости): </label>
-              <input type="number" step="0.1" value={params.c_u} onChange={(e) => setParams({...params, c_u: parseFloat(e.target.value)})} />
+              <input 
+                type="number" 
+                step="0.1" 
+                value={params.c_u} 
+                onChange={(e) => setParams({...params, c_u: parseFloat(e.target.value)})} 
+              />
             </div>
             <div>
               <label>U (макс. емкость): </label>
-              <input type="number" value={params.U} onChange={(e) => setParams({...params, U: parseFloat(e.target.value)})} />
+              <input 
+                type="number" 
+                value={params.U} 
+                onChange={(e) => setParams({...params, U: parseFloat(e.target.value)})} 
+              />
             </div>
           </div>
           
-          {/* Требования */}
           <div style={{ padding: '15px', border: '1px solid #ccc', borderRadius: '8px', marginBottom: '15px' }}>
             <h3>Требования (Demands)</h3>
             {demands.map((demand, idx) => (
               <div key={idx} style={{ marginBottom: '10px', padding: '10px', background: '#f5f5f5', borderRadius: '5px' }}>
-                <select value={demand.source} onChange={(e) => updateDemand(idx, 'source', e.target.value)} style={{ width: '100px', marginRight: '5px' }}>
+                <select 
+                  value={demand.source} 
+                  onChange={(e) => updateDemand(idx, 'source', e.target.value)} 
+                  style={{ width: '100px', marginRight: '5px' }}
+                >
                   <option value="">Источник</option>
                   {nodes.map(n => <option key={n.id} value={n.id}>{n.name || n.id}</option>)}
                 </select>
                 →
-                <select value={demand.target} onChange={(e) => updateDemand(idx, 'target', e.target.value)} style={{ width: '100px', marginLeft: '5px' }}>
+                <select 
+                  value={demand.target} 
+                  onChange={(e) => updateDemand(idx, 'target', e.target.value)} 
+                  style={{ width: '100px', marginLeft: '5px' }}
+                >
                   <option value="">Назначение</option>
                   {nodes.map(n => <option key={n.id} value={n.id}>{n.name || n.id}</option>)}
                 </select>
-                <input type="number" value={demand.volume} onChange={(e) => updateDemand(idx, 'volume', parseFloat(e.target.value))} style={{ width: '70px', marginLeft: '5px' }} />
+                <input 
+                  type="number" 
+                  value={demand.volume} 
+                  onChange={(e) => updateDemand(idx, 'volume', parseFloat(e.target.value))} 
+                  style={{ width: '70px', marginLeft: '5px' }} 
+                />
                 <button onClick={() => removeDemand(idx)} style={{ marginLeft: '10px' }}>🗑️</button>
               </div>
             ))}
             <button onClick={addDemand}>+ Добавить требование</button>
           </div>
           
-          {/* Результат */}
           {result && (
             <div style={{ padding: '15px', border: '1px solid #4CAF50', borderRadius: '8px', background: '#e8f5e9' }}>
               <h3>📊 Результат</h3>
@@ -200,7 +339,6 @@ function App() {
         </div>
       </div>
       
-      {/* Список узлов */}
       <div style={{ marginTop: '20px', padding: '15px', border: '1px solid #ccc', borderRadius: '8px' }}>
         <h3>Узлы ({nodes.length})</h3>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>

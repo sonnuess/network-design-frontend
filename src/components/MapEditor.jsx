@@ -1,7 +1,7 @@
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMapEvents } from 'react-leaflet'
 import L from 'leaflet'
 
-// Исправляем иконки Leaflet
+//  иконки Leaflet
 delete L.Icon.Default.prototype._getIconUrl
 L.Icon.Default.mergeOptions({
   iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
@@ -42,8 +42,8 @@ export default function MapEditor({ nodes, links, onAddNode, onSelectNode }) {
       
       {/* Рисуем линии (каналы) */}
       {links.map((link, idx) => {
-        const fromNode = nodes.find(n => n.id === link.source)
-        const toNode = nodes.find(n => n.id === link.target)
+        const fromNode = nodes.find(n => n.id === link.source_node_id)
+        const toNode = nodes.find(n => n.id === link.dest_node_id)
         if (!fromNode || !toNode) return null
         return (
           <Polyline
