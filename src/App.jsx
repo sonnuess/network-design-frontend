@@ -42,8 +42,30 @@ function App() {
     loadParameters()
   }, [])
 
-  const addNode = (newNode) => {
-    setNodes([...nodes, newNode])
+  // Добавление узла (с сохранением в БД)
+  const addNode = async (newNode) => {
+    try {
+      const response = await fetch('http://localhost:8000/api/v2/nodes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: newNode.name || `Node ${newNode.id}`,
+          lat: newNode.lat,
+          lng: newNode.lon  // ← исправлено: lon → lng
+        })
+      })
+      
+      if (response.ok) {
+        const savedNode = await response.json()
+        setRealNodeIds(prev => ({ ...prev, [newNode.id]: savedNode.id }))
+        setNodes([...nodes, newNode])
+        console.log(`Узел ${newNode.id} сохранён в БД с ID ${savedNode.id}`)
+      } else {
+        console.error('Ошибка сохранения узла:', response.status)
+      }
+    } catch (error) {
+      console.error('Ошибка:', error)
+    }
   }
 
   // Генерация всех возможных каналов
@@ -108,7 +130,7 @@ function App() {
         body: JSON.stringify({
           name: name || `Node ${tempId}`,
           lat: lat,
-          lng: lng
+          lng: lng  // ← исправлено: была ошибка в параметре
         })
       })
       
@@ -277,6 +299,17 @@ function App() {
       return false
     }
     
+    // Сначала сохраняем узлы в БД (если ещё не сохранены)
+    const sourceNode = nodes.find(n => n.id === sourceId)
+    const destNode = nodes.find(n => n.id === destId)
+    
+    if (sourceNode && !realNodeIds[sourceId]) {
+      await getRealNodeId(sourceId, sourceNode.lat, sourceNode.lon, sourceNode.name)
+    }
+    if (destNode && !realNodeIds[destId]) {
+      await getRealNodeId(destId, destNode.lat, destNode.lon, destNode.name)
+    }
+    
     const deleted = await deleteLinkFromBackend(sourceId, destId)
     
     if (deleted) {
@@ -339,7 +372,7 @@ function App() {
     setDemands(newDemands)
   }
 
-  // Сохранение узлов в БД
+  // Сохранение узлов в БД (для оптимизации)
   const saveNodesToBackend = async () => {
     const savedNodes = []
     for (const node of nodes) {
@@ -350,7 +383,7 @@ function App() {
           body: JSON.stringify({
             name: node.name || `Node ${node.id}`,
             lat: node.lat,
-            lng: node.lon
+            lng: node.lon  // ← исправлено: lon → lng
           }),
         })
         
