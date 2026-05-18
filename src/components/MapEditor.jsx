@@ -39,7 +39,7 @@ export default function MapEditor({ nodes, links, onAddNode, onSelectNode, isAdd
             key={idx}
             positions={[[fromNode.lat, fromNode.lon], [toNode.lat, toNode.lon]]}
             color="#888"
-            weight={2}
+            weight={6}
             opacity={0.7}
           />
         )
