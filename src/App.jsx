@@ -229,7 +229,7 @@ function App() {
       console.log('Ответ бэкенда:', resultData)
       setResult(resultData)
       
-      alert(`✅ Оптимизация завершена!\nСтоимость сети: ${resultData.objective?.toFixed(2)}`)
+      alert(`✅ Оптимизация завершена!\nСтоимость сети: ${resultData.total_cost?.toFixed(2) || 'N/A'}`)
     } catch (error) {
       console.error('Ошибка:', error)
       alert('❌ Ошибка при оптимизации: ' + error.message)
@@ -328,12 +328,15 @@ function App() {
             <button onClick={addDemand}>+ Добавить требование</button>
           </div>
           
+          {/* Результат оптимизации */}
           {result && (
             <div style={{ padding: '15px', border: '1px solid #4CAF50', borderRadius: '8px', background: '#e8f5e9' }}>
-              <h3>📊 Результат</h3>
+              <h3>📊 Результат оптимизации</h3>
               <p><strong>Статус:</strong> {result.status}</p>
-              <p><strong>Стоимость сети:</strong> {result.objective?.toFixed(2)}</p>
-              <p><strong>Построено каналов:</strong> {result.links?.filter(l => l.z === 1).length || 0}</p>
+              <p><strong>💰 Общая стоимость сети:</strong> {result.total_cost?.toFixed(2)}</p>
+              <p><strong>🔗 Построено каналов:</strong> {result.links_built_count || 0}</p>
+              <p><strong>🔄 Назначено потоков:</strong> {result.flows_assigned_count || 0}</p>
+              <p><strong>📝 Сообщение:</strong> {result.message}</p>
             </div>
           )}
         </div>
